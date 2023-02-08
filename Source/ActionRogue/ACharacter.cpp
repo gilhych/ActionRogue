@@ -7,6 +7,8 @@
 #include "GameFramework/SpringArmComponent.h"
 #include "EnhancedInputSubsystems.h"
 #include "EnhancedInputComponent.h"
+#include "SInteractionComponent.h"
+#include "GameFramework/CharacterMovementComponent.h"
 
 // Sets default values
 AACharacter::AACharacter()
@@ -14,21 +16,20 @@ AACharacter::AACharacter()
  	// Set this character to call Tick() every frame.  You can turn this off to improve performance if you don't need it.
 	PrimaryActorTick.bCanEverTick = true;
 
-	SpringArmComp = CreateDefaultSubobject<USpringArmComponent>("SpringArmComp");
+	SpringArmComp = CreateDefaultSubobject<USpringArmComponent>(TEXT("SpringArmComp"));
+	SpringArmComp -> bUsePawnControlRotation = false;
 	SpringArmComp -> SetupAttachment(RootComponent);
 	
 	CameraComp = CreateDefaultSubobject<UCameraComponent>("CameraComp");
 	CameraComp -> SetupAttachment(SpringArmComp);
-}
 
-void AACharacter::PrimaryAttack()
-{
-	FTransform SpawnTransform(GetControlRotation(), GetMesh()->GetSocketLocation("Muzzle_01"));
+	InteractionComp = CreateDefaultSubobject<USInteractionComponent>("InteractionComp");
+
+	AttributeComp = CreateDefaultSubobject<USAttributeComponent>("AttributeComp");
+
+	GetCharacterMovement() -> bOrientRotationToMovement = true;
 	
-	FActorSpawnParameters SpawnParams;
-	SpawnParams.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
-
-	GetWorld()->SpawnActor<AActor>(ProjectileClass, SpawnTransform, SpawnParams);
+	bUseControllerRotationYaw = false;
 }
 
 // Called when the game starts or when spawned
@@ -54,6 +55,10 @@ void AACharacter::SetupPlayerInputComponent(UInputComponent* PlayerInputComponen
     	Input->BindAction(IA_Player, ETriggerEvent::Triggered, this, &ThisClass::InputMoves);
     	Input->BindAction(IA_DirectionRef, ETriggerEvent::Triggered, this, &ThisClass::InputDirection);
     	Input->BindAction(IA_PrimaryAttackRef, ETriggerEvent::Triggered, this, &ThisClass::PrimaryAttack);
+		Input->BindAction(IA_PrimaryInteract, ETriggerEvent::Started, this, &ThisClass::PrimaryInteract);
+		Input->BindAction(IA_Jump, ETriggerEvent::Started, this, &ThisClass::InputJump);
+		Input->BindAction(IA_BlackHole, ETriggerEvent::Started, this, &ThisClass::InputBlackHole);
+		Input->BindAction(IA_Teleport, ETriggerEvent::Started, this, &ThisClass::PrimaryTeleport);
 }
 
 void AACharacter::InputsAtBeginPlay()
@@ -133,7 +138,134 @@ void AACharacter::InputDirection(const FInputActionValue& Value)
 	}
 }
 
+void AACharacter::PrimaryAttack()
+{
+	PlayAnimMontage(AttackAnim);
 
+	GetWorldTimerManager().SetTimer(TimerHandle_PrimaryAttack, this, &AACharacter::PrimaryAttack_TimeElapsed, 0.2f);
+
+	// GetWorldTimerManager().ClearTimer(TimerHandle_PrimaryAttack);
+	
+}
+
+void AACharacter::PrimaryAttack_TimeElapsed()
+{
+	FHitResult OutHit;
+	FVector Start = CameraComp->GetComponentLocation();
+	FVector End = CameraComp->GetComponentLocation() + CameraComp->GetComponentRotation().Vector() * 3000.f;
+	FCollisionObjectQueryParams ObjectQueryParams;
+	ObjectQueryParams.AddObjectTypesToQuery(ECC_WorldDynamic);
+	ObjectQueryParams.AddObjectTypesToQuery(ECC_WorldStatic);
+	ObjectQueryParams.AddObjectTypesToQuery(ECC_Pawn);
+	ObjectQueryParams.AddObjectTypesToQuery(ECC_PhysicsBody);	
+	FCollisionQueryParams Params = FCollisionQueryParams::DefaultQueryParam;
+	Params.AddIgnoredActor(this);
+	GetWorld()->LineTraceSingleByObjectType(OutHit, Start, End, ObjectQueryParams, Params);
+	FVector Vector_NetQuantize = OutHit.bBlockingHit ? OutHit.ImpactPoint : OutHit.TraceEnd;
+	FVector Vector = Vector_NetQuantize - GetMesh()->GetSocketLocation("Muzzle_01");
+	
+	FTransform SpawnTransform(Vector.Rotation(), GetMesh()->GetSocketLocation("Muzzle_01"));
+	
+	FActorSpawnParameters SpawnParams;
+	SpawnParams.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
+	SpawnParams.Instigator = this;
+	
+	GetWorld()->SpawnActor<AActor>(ProjectileClass, SpawnTransform, SpawnParams);
+}
+
+void AACharacter::PrimaryInteract()
+{
+	if(InteractionComp)
+	{
+		InteractionComp->PrimaryInteract();
+	}
+}
+
+void AACharacter::InputJump()
+{
+	Jump();
+	
+	/*
+	StopJumping(); 점프가 끝나는 순간을 찾아줌
+	JumpMaxHoldTime; 점프가 최대치에 도달하는 시간을 정리
+	JumpMaxCount;	점프 숫자를 관리
+	GetCharacterMovement()->JumpZVelocity; 점프 가속도에 대한것을 정리
+*/
+}
+
+void AACharacter::InputBlackHole()
+{
+	PlayAnimMontage(AttackAnim);
+
+	GetWorldTimerManager().SetTimer(TimerHandle_PrimaryAttack, this, &AACharacter::BlackHole_TimeElapes, 0.2f);
+
+	// GetWorldTimerManager().ClearTimer(TimerHandle_PrimaryAttack);
+	
+}
+
+
+void AACharacter::BlackHole_TimeElapes()
+{
+	FHitResult OutHit;
+	FVector Start = CameraComp->GetComponentLocation();
+	FVector End = CameraComp->GetComponentLocation() + CameraComp->GetComponentRotation().Vector() * 3000.f;
+	FCollisionObjectQueryParams ObjectQueryParams;
+	ObjectQueryParams.AddObjectTypesToQuery(ECC_WorldDynamic);
+	ObjectQueryParams.AddObjectTypesToQuery(ECC_WorldStatic);
+	ObjectQueryParams.AddObjectTypesToQuery(ECC_Pawn);
+	ObjectQueryParams.AddObjectTypesToQuery(ECC_PhysicsBody);
+
+	FCollisionQueryParams Params = FCollisionQueryParams::DefaultQueryParam;
+	Params.AddIgnoredActor(this);
+	GetWorld()->LineTraceSingleByObjectType(OutHit, Start, End, ObjectQueryParams,Params);
+	FVector Vector_NetQuantize = OutHit.bBlockingHit ? OutHit.ImpactPoint : OutHit.TraceEnd;
+	FVector Vector = Vector_NetQuantize - GetMesh()->GetSocketLocation("Muzzle_01");
+	
+	FTransform SpawnTransform(Vector.Rotation(), GetMesh()->GetSocketLocation("Muzzle_01"));
+	
+	FActorSpawnParameters SpawnParams;
+	SpawnParams.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
+	SpawnParams.Instigator = this;
+	
+	GetWorld()->SpawnActor<AActor>(BlackHoleProjectileClass, SpawnTransform, SpawnParams);
+}
+
+void AACharacter::PrimaryTeleport()
+{
+	PlayAnimMontage(AttackAnim);
+
+	GetWorldTimerManager().SetTimer(TimerHandle_PrimaryAttack, this, &AACharacter::Teleprot_TimeElapes, 0.2f);
+
+	// GetWorldTimerManager().ClearTimer(TimerHandle_PrimaryAttack);
+	
+}
+
+
+void AACharacter::Teleprot_TimeElapes()
+{
+	FHitResult OutHit;
+	FVector Start = CameraComp->GetComponentLocation();
+	FVector End = CameraComp->GetComponentLocation() + CameraComp->GetComponentRotation().Vector() * 700.f;
+	FCollisionObjectQueryParams ObjectQueryParams;
+	ObjectQueryParams.AddObjectTypesToQuery(ECC_WorldDynamic);
+	ObjectQueryParams.AddObjectTypesToQuery(ECC_WorldStatic);
+	ObjectQueryParams.AddObjectTypesToQuery(ECC_Pawn);
+	ObjectQueryParams.AddObjectTypesToQuery(ECC_PhysicsBody);
+
+	FCollisionQueryParams Params = FCollisionQueryParams::DefaultQueryParam;
+	Params.AddIgnoredActor(this);
+	GetWorld()->LineTraceSingleByObjectType(OutHit, Start, End, ObjectQueryParams,Params);
+	FVector Vector_NetQuantize = OutHit.bBlockingHit ? OutHit.ImpactPoint : OutHit.TraceEnd;
+	FVector Vector = Vector_NetQuantize - GetMesh()->GetSocketLocation("Muzzle_01");
+	
+	FTransform SpawnTransform(Vector.Rotation(), GetMesh()->GetSocketLocation("Muzzle_01"));
+	
+	FActorSpawnParameters SpawnParams;
+	SpawnParams.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
+	SpawnParams.Instigator = this;
+	
+	GetWorld()->SpawnActor<AActor>(TeleportProjectileClass, SpawnTransform, SpawnParams);
+}
 
 
 
